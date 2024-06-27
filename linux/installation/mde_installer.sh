@@ -317,8 +317,8 @@ detect_distro()
 
 verify_channel()
 {
-    if [ "$CHANNEL" != "prod" ] && [ "$CHANNEL" != "insiders-fast" ] && [ "$CHANNEL" != "insiders-slow" ]; then
-        script_exit "Invalid channel: $CHANNEL. Please provide valid channel. Available channels are prod, insiders-fast, insiders-slow" $ERR_INVALID_CHANNEL
+    if [ "$CHANNEL" != "prod" ] && [ "$CHANNEL" != "insiders-fast" ] && [ "$CHANNEL" != "insiders-slow" ] && [ "$CHANNEL" != "nightly" ]; then
+      script_exit "Invalid channel: $CHANNEL. Please provide valid channel. Available channels are prod, insiders-fast, insiders-slow, nightly (experimental)" $ERR_INVALID_CHANNEL
     fi
 }
 
@@ -527,6 +527,7 @@ install_on_debian()
     local packages=
     local pkg_version=
     local success=
+    local selected_channel=
 
     if check_if_pkg_is_installed mdatp; then
         pkg_version=$($MDE_VERSION_CMD) || script_exit "unable to fetch the app version. please upgrade to latest version $?" $ERR_INTERNAL
@@ -538,10 +539,23 @@ install_on_debian()
 
     install_required_pkgs ${packages[@]}
 
+    ### Nightly channel fix ###
+    if [ "$CHANNEL" == "nightly" ]; then
+      selected_channel="prod"
+    else
+      selected_channel="$CHANNEL"
+    fi
+      
+
     ### Configure the repository ###
     rm -f microsoft.list > /dev/null
-    run_quietly "curl -s -o microsoft.list $PMC_URL/$DISTRO/$SCALED_VERSION/$CHANNEL.list" "unable to fetch repo list" $ERR_FAILED_REPO_SETUP
-    run_quietly "mv ./microsoft.list /etc/apt/sources.list.d/microsoft-$CHANNEL.list" "unable to copy repo to location" $ERR_FAILED_REPO_SETUP
+    run_quietly "curl -s -o microsoft.list $PMC_URL/$DISTRO/$SCALED_VERSION/$selected_channel.list" "unable to fetch repo list" $ERR_FAILED_REPO_SETUP
+    run_quietly "mv ./microsoft.list /etc/apt/sources.list.d/microsoft-$selected_channel.list" "unable to copy repo to location" $ERR_FAILED_REPO_SETUP
+
+    ### Nightly channel fix ###
+    if [ "$CHANNEL" == "nightly" ]; then
+      run_quietly "sed -i 's/\/prod\ /\/prod\ nightly\ /g' /etc/apt/sources.list.d/microsoft-$selected_channel.list" "unable to patch repo to nightly" $ERR_FAILED_REPO_SETUP
+    fi
 
     ### Fetch the gpg key ###
     run_quietly "curl -s https://packages.microsoft.com/keys/microsoft.asc | apt-key add -" "unable to fetch the gpg key" $ERR_FAILED_REPO_SETUP
@@ -549,7 +563,7 @@ install_on_debian()
 
     ### Install MDE ###
     log_info "[>] installing MDE"
-    if [ "$CHANNEL" = "prod" ]; then
+    if [ "$CHANNEL" = "prod" ] || [ "$CHANNEL" = "nightly" ]; then
         if [[ -z "$VERSION_NAME" ]]; then
             run_quietly "$PKG_MGR_INVOKER install mdatp" "unable to install MDE ($?)" $ERR_INSTALLATION_FAILED
         else
@@ -1013,12 +1027,19 @@ set_device_tags()
     log_info "[v] tags set."   
 }
 
+check_channel()
+{
+  if [ "$CHANNEL" == "nightly" ] && [ "$DISTRO_FAMILY" != "debian" ]; then
+    script_exit "Nightly channel is not supported on current distro family: $DISTRO_FAMILY"
+  fi
+}
+
 usage()
 {
     echo "mde_installer.sh v$SCRIPT_VERSION"
     echo "usage: $1 [OPTIONS]"
     echo "Options:"
-    echo " -c|--channel         specify the channel(insiders-fast / insiders-slow / prod) from which you want to install. Default: insiders-fast"
+    echo " -c|--channel         specify the channel(insiders-fast / insiders-slow / prod / nightly) from which you want to install. Default: insiders-fast"
     echo " -i|--install         install the product"
     echo " -r|--remove          remove the product"
     echo " -u|--upgrade         upgrade the existing product to a newer version if available"
@@ -1206,6 +1227,9 @@ scale_version_id
 ### Set package manager ###
 set_package_manager
 
+### Check channel ###
+check_channel
+
 ### Act according to arguments ###
 if [ "$INSTALL_MODE" == "i" ]; then
 
@@ -1267,3 +1291,4 @@ if [ ${#tags[@]} -gt 0 ]; then
 fi
 
 script_exit "--- mde_installer.sh ended. ---" $SUCCESS
+
